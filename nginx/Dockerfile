@@ -1,5 +1,11 @@
-FROM alpine:3.2
-RUN apk add --update nginx && rm -rf /var/cache/apk/*
+FROM alpine:latest
+MAINTAINER Bruno Simoes <brunogsimoes@gmail.com>
+
+RUN apk add --update nginx
+
+# Clean up APT when done
+RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
 RUN mkdir -p /tmp/nginx/client-body
 
 COPY config/nginx.conf /etc/nginx/nginx.conf

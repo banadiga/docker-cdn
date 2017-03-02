@@ -28,6 +28,12 @@ To install and configure HAProxy, Registrator and Consul type (do not change cdn
 make cdn
 ```
 
+or the following to setup a cdn that will join another cdn:
+
+```sh
+make cdn JOIN_NODE=192.XX.XX.XX
+```
+
 Once done, you will find the admin URLs (HAProxy and Consul) in your terminal. The default user:password is admin:password. 
 
 ### Setup a demo

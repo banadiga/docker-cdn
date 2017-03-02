@@ -1,14 +1,12 @@
 ENTRYPOINT ?= web
 SERVERNAME ?= demo
 VM_NAME ?= cdn
-PORT=$(shell docker inspect -format='{{(index (index .NetworkSettings.Ports "22/tcp") 0).HostPort}}' $(VM_NAME))
 
 all:
 	@echo "usage:\tmake create-vm VM_NAME=$(VM_NAME) \t-- create a VM machine"
 	@echo "\tmake cdn \t\t\t-- configure the cdn"
 	@echo "\tmake clean \t\t\t-- undeploy the cdn and remove the VM"
 	@echo "\tmake debug \t\t\t-- launches a debug shell into the latest intermediate docker image"
-	@echo "\tmake ssh \t\t\t-- SSH into the running container"
 	@echo "\tmake run-consul \t\t-- install consul (only)"
 	@echo "\tmake run-registrator \t\t-- install registrator (only)"
 	@echo "\tmake run-haproxy \t\t-- install haproxy (only)"
@@ -17,8 +15,9 @@ all:
 
 create-vm:
 	-docker-machine create --driver=virtualbox $(VM_NAME)
-	-@echo "\n# Run this command to configure your shell:" 
-	-@echo '# eval $$(docker-machine env $(VM_NAME))'
+	-@echo "\n#> Run this command to configure your shell:" 
+	-@echo '#> eval $$(docker-machine env $(VM_NAME))'
+	-@echo "#> Afterwards execute: make cdn"
 	-@echo ""
 
 cdn-url:
@@ -29,7 +28,9 @@ cdn-url:
 
 cdn: run-consul run-registrator run-haproxy cdn-url
 
+ifeq ($(JOIN_NODE),)
 run-consul:
+	-@echo "- setting up a cluster server"
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
 	-docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
 	-p $(DOCKER_IP):8300:8300 \
@@ -39,9 +40,31 @@ run-consul:
 	-p $(DOCKER_IP):8302:8302/udp \
 	-p $(DOCKER_IP):8400:8400 \
 	-p $(DOCKER_IP):8500:8500 \
-	progrium/consul -server \
-	-advertise $(DOCKER_IP) -bootstrap-expect 1
-	-echo "website http://$(DOCKER_IP):8500/"
+	consul:latest agent -server -ui \
+	-client=0.0.0.0 \
+	-advertise=$(DOCKER_IP) \
+	-bootstrap-expect=1 
+	-@docker exec -t consul consul members
+	-@echo "- consul web ui: http://$(DOCKER_IP):8500/"
+else  
+run-consul:
+	-@echo "- setting up a client node"
+	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
+	-docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
+	-p $(DOCKER_IP):8300:8300 \
+	-p $(DOCKER_IP):8301:8301 \
+	-p $(DOCKER_IP):8301:8301/udp \
+	-p $(DOCKER_IP):8302:8302 \
+	-p $(DOCKER_IP):8302:8302/udp \
+	-p $(DOCKER_IP):8400:8400 \
+	-p $(DOCKER_IP):8500:8500 \
+	consul:latest agent -ui \
+	-client=0.0.0.0 \
+	-advertise=$(DOCKER_IP) \
+	-join $(JOIN_NODE) 
+	-@docker exec -t consul consul members
+	-@echo "- consul web ui: http://$(DOCKER_IP):8500/"
+endif
 
 run-registrator:
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
@@ -50,18 +73,18 @@ run-registrator:
 	consul://$(DOCKER_IP):8500
 
 run-template:
-	-docker run --dns 172.17.42.1 --rm sirile/haproxy -consul=$(shell docker-machine ip $(DOCKER_MACHINE_NAME)):8500 -dry -once
+	-docker run --dns 172.17.42.1 --rm brunosimoes/haproxy -consul=$(shell docker-machine ip $(DOCKER_MACHINE_NAME)):8500 -dry -once
 
 run-haproxy:
-	-docker build -t sirile/haproxy haproxy/
+	-docker build -t brunosimoes/haproxy haproxy/
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
 	-docker run -d -e HAPROXY_STATS=true \
-		-e HAPROXY_DOMAIN=$(shell docker-machine ip master) \
-		-e SERVICE_NAME=rest --name=rest \
+		-e HAPROXY_DOMAIN=$(DOCKER_IP) \
+		-e SERVICE_NAME=rest --name=haproxy \
 		--dns 172.17.42.1 \
 		-p $(DOCKER_IP):80:80 \
 		-p $(DOCKER_IP):1936:1936 \
-		sirile/haproxy -consul=$(DOCKER_IP):8500
+		brunosimoes/haproxy -consul=$(DOCKER_IP):8500
 
 clean:
 	-docker rm $(docker ps --all -q -f status=dead)
@@ -72,34 +95,15 @@ clean:
 debug:
 	docker run -t -i `docker images -q | head -n 1` /bin/bash
 
-ssh:
-	ssh localhost -l root -p $(PORT) -o ForwardAgent=yes -o NoHostAuthenticationForLocalhost=yes
-
 demo:
-	-docker build -t test/tinyweb tinyweb/
-	-docker run -d -e SERVICE_NAME=demo/hello -e SERVICE_TAGS=rest -h serv1 --name serv1 -p :80 test/tinyweb
-	-docker run -d -e SERVICE_NAME=demo/hello -e SERVICE_TAGS=rest -h serv2 --name serv2 -p :80 test/tinyweb
-	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-@echo "\nEntry-point URL: http://$(DOCKER_IP):80/demo/hello\n"
+	-docker build -t brunosimoes/tinyweb tinyweb/ || exit 
+	-docker run -d -e SERVICE_NAME=demo/hello -e SERVICE_TAGS=rest -h serv1 --name serv1 -p :80 brunosimoes/tinyweb 
+	-docker run -d -e SERVICE_NAME=demo/hello -e SERVICE_TAGS=rest -h serv2 --name serv2 -p :80 brunosimoes/tinyweb 
+	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME))) 
+	-echo "\nEntry-point URL: http://$(DOCKER_IP):80/demo/hello\n"
 
 webserver:
-	-docker build -t http/nginx nginx/
-	-docker run -d -e SERVICE_NAME=$(ENTRYPOINT) -e SERVICE_TAGS=rest -h $(SERVERNAME) --name $(SERVERNAME) -p :80 http/nginx
+	-docker build -t brunosimoes/nginx nginx/
+	-docker run -d -e SERVICE_NAME=$(ENTRYPOINT) -e SERVICE_TAGS=rest -h $(SERVERNAME) --name $(SERVERNAME) -p :80 brunosimoes/nginx
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
 	-@echo "\nEntry-point URL: http://$(DOCKER_IP):80/$(ENTRYPOINT)\n"
-
-run-consul-s:
-	-$(eval DOCKER_CONSUL_IP := $(shell docker-machine ip master))
-	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
-	-p $(DOCKER_IP):8300:8300 \
-	-p $(DOCKER_IP):8301:8301 \
-	-p $(DOCKER_IP):8301:8301/udp \
-	-p $(DOCKER_IP):8302:8302 \
-	-p $(DOCKER_IP):8302:8302/udp \
-	-p $(DOCKER_IP):8400:8400 \
-	-p $(DOCKER_IP):8500:8500 \
-	progrium/consul -server \
-	-join=$(DOCKER_CONSUL_IP) \
-	-advertise $(DOCKER_IP) -bootstrap-expect 1
-	-echo "website http://$(DOCKER_IP):8500/"
