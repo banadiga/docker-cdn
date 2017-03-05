@@ -68,3 +68,7 @@ make webserver ENTRYPOINT=web SERVERNAME=demo
 ```
 
 You can access your website using the following URL pattern http://machine-ip/web. Repeat the same step with different SERVERNAME params to create more nodes.
+
+## License
+
+The code and content of the cheat sheet is release under [Creative Commons](https://creativecommons.org/licenses/by/3.0/).
