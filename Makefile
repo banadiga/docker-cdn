@@ -1,3 +1,4 @@
+TARGETS = consul registrator haproxy
 ENTRYPOINT ?= web
 SERVERNAME ?= demo
 VM_NAME ?= cdn
@@ -27,6 +28,18 @@ start:
 	-@echo '#> eval $$(docker-machine env $(VM_NAME))'
 	-@echo ""
 
+stop-consul:
+	-@(docker ps | grep consul  | awk '{ print $$1 }' | xargs docker kill) > /dev/null
+	-@(docker ps -a | grep consul | awk '{ print $$1 }' | xargs docker rm) > /dev/null
+
+stop-registrator:
+	-@(docker ps | grep registrator  | awk '{ print $$1 }' | xargs docker kill) > /dev/null
+	-@(docker ps -a | grep registrator | awk '{ print $$1 }' | xargs docker rm) > /dev/null
+
+stop-haproxy:
+	-@(docker ps | grep haproxy  | awk '{ print $$1 }' | xargs docker kill) > /dev/null
+	-@(docker ps -a | grep haproxy | awk '{ print $$1 }' | xargs docker rm) > /dev/null
+
 stop:
 	-docker-machine stop $(VM_NAME)
 
@@ -38,9 +51,10 @@ clean:
 
 cdn-url:
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
+	-@echo ""
 	-@docker-machine ls
-	-@echo "\nConsul Admin URL: http://$(DOCKER_IP):8500/"
-	-@echo "HAproxy Stats URL: http://$(DOCKER_IP):1936/ (user:admin, pass:password)\n"
+	-@echo "\n# Consul Admin URL: http://$(DOCKER_IP):8500/"
+	-@echo "# HAproxy Stats URL: http://$(DOCKER_IP):1936/ (user:admin, pass:password)"
 
 cdn: run-consul run-registrator run-haproxy cdn-url
 
@@ -48,9 +62,9 @@ stop-cdn: stop-consul stop-registrator stop-haproxy stop-demo stop-webserver
 
 ifeq ($(JOIN_NODE),)
 run-consul: stop-consul
-	-@echo "- setting up a cluster server"
-	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
+	-@echo "# Setting up a cluster server ..."
+	-@$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
+	-@docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
 	-p $(DOCKER_IP):8300:8300 \
 	-p $(DOCKER_IP):8301:8301 \
 	-p $(DOCKER_IP):8301:8301/udp \
@@ -61,14 +75,14 @@ run-consul: stop-consul
 	consul:latest agent -server -ui \
 	-client=0.0.0.0 \
 	-advertise=$(DOCKER_IP) \
-	-bootstrap-expect=1 
-	-@docker exec -t consul consul members
-	-@echo "- consul web ui: http://$(DOCKER_IP):8500/"
+	-bootstrap-expect=1 > /dev/null
+	-@docker exec -t consul consul members > /dev/null
+	-@echo "# Consul web ui: http://$(DOCKER_IP):8500/"
 else  
 run-consul: stop-consul
-	-@echo "- setting up a client node"
-	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
+	-@echo "# Setting up a client node"
+	-@$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
+	-@docker run --name consul -d -h $(DOCKER_MACHINE_NAME) \
 	-p $(DOCKER_IP):8300:8300 \
 	-p $(DOCKER_IP):8301:8301 \
 	-p $(DOCKER_IP):8301:8301/udp \
@@ -79,42 +93,30 @@ run-consul: stop-consul
 	consul:latest agent -ui \
 	-client=0.0.0.0 \
 	-advertise=$(DOCKER_IP) \
-	-join $(JOIN_NODE) 
-	-@docker exec -t consul consul members
-	-@echo "- consul web ui: http://$(DOCKER_IP):8500/"
+	-join $(JOIN_NODE)  > /dev/null
+	-@docker exec -t consul consul members > /dev/null
+	-@echo "# Consul web ui: http://$(DOCKER_IP):8500/"
 endif
 
-stop-consul:
-	@-docker kill consul || true
-	@-docker rm -f consul || true
-
 run-registrator: stop-registrator
-	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-docker run -d -v /var/run/docker.sock:/tmp/docker.sock \
+	-@$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
+	-@docker run -d -v /var/run/docker.sock:/tmp/docker.sock \
 	-h registrator --name registrator gliderlabs/registrator \
-	consul://$(DOCKER_IP):8500
-
-stop-registrator:
-	@-docker kill registrator || true
-	@-docker rm -f registrator || true
+	consul://$(DOCKER_IP):8500 > /dev/null
 
 run-template:
 	-docker run --dns 172.17.42.1 --rm brunosimoes/haproxy -consul=$(shell docker-machine ip $(DOCKER_MACHINE_NAME)):8500 -dry -once
 
 run-haproxy: stop-haproxy
-	-docker build -t brunosimoes/haproxy haproxy/
+	-@docker build -t brunosimoes/haproxy haproxy/ > /dev/null
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME)))
-	-docker run -d -e HAPROXY_STATS=true \
+	-@docker run -d -e HAPROXY_STATS=true \
 		-e HAPROXY_DOMAIN=$(DOCKER_IP) \
 		-e SERVICE_NAME=rest --name=haproxy \
 		--dns 172.17.42.1 \
 		-p $(DOCKER_IP):80:80 \
 		-p $(DOCKER_IP):1936:1936 \
-		brunosimoes/haproxy -consul=$(DOCKER_IP):8500
-
-stop-haproxy:
-	@-docker kill haproxy || true
-	@-docker rm -f haproxy || true
+		brunosimoes/haproxy -consul=$(DOCKER_IP):8500 > /dev/null
     
 demo: stop-demo
 	-docker build -t brunosimoes/tinyweb tinyweb/ || exit 
@@ -123,11 +125,9 @@ demo: stop-demo
 	-$(eval DOCKER_IP := $(shell docker-machine ip $(DOCKER_MACHINE_NAME))) 
 	-echo "\nEntry-point URL: http://$(DOCKER_IP):80/demo/hello\n"
 
-stop-demo:
-	@-docker kill serv1 || true
-	@-docker rm -f serv1 || true
-	@-docker kill serv2 || true
-	@-docker rm -f serv2 || true    
+stop-demo:  
+	-@(docker ps | grep serv  | awk '{ print $$1 }' | xargs docker kill) > /dev/null
+	-@(docker ps -a | grep serv | awk '{ print $$1 }' | xargs docker rm) > /dev/null
     
 webserver: stop-webserver
 	-docker build -t brunosimoes/nginx nginx/
@@ -136,8 +136,8 @@ webserver: stop-webserver
 	-@echo "\nEntry-point URL: http://$(DOCKER_IP):80/$(ENTRYPOINT)\n"
 
 stop-webserver:
-	@-docker kill $(SERVERNAME) || true
-	@-docker rm -f $(SERVERNAME) || true
-
+	-@(docker ps | grep $(SERVERNAME)  | awk '{ print $$1 }' | xargs docker kill) > /dev/null
+	-@(docker ps -a | grep $(SERVERNAME) | awk '{ print $$1 }' | xargs docker rm) > /dev/null
+    
 debug:
 	docker run -t -i `docker images -q | head -n 1` /bin/bash
